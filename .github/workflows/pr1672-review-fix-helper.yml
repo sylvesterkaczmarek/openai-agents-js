@@ -1,0 +1,273 @@
+name: PR 1672 review fix helper
+
+on:
+  push:
+    branches: [ops/pr1672-review-fixes]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/realtime-function-call-history-645
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply current review fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('packages/agents-realtime/src/openaiRealtimeBase.ts')
+          source = source_path.read_text()
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{label}: expected exactly one match, found {count}')
+              return text.replace(old, new, 1)
+
+          source = replace_once(
+              source,
+              "      outputItemId?: string;\n      deletePhase?: 'output' | 'call';",
+              "      outputItemId?: string;\n      outputDeleted?: boolean;\n      deletePhase?: 'output' | 'call';",
+              'tracked output deletion state',
+          )
+          source = replace_once(
+              source,
+              "  >();\n\n  protected eventEmitter: RuntimeEventEmitter<OpenAIRealtimeEventTypes> =",
+              "  >();\n  #connectionStatePrepared = false;\n\n  protected eventEmitter: RuntimeEventEmitter<OpenAIRealtimeEventTypes> =",
+              'connection state flag',
+          )
+          source = replace_once(
+              source,
+              "  constructor(options: OpenAIRealtimeBaseOptions = {}) {\n    super();\n    this.#model = options.model ?? DEFAULT_OPENAI_REALTIME_MODEL;\n    this.#apiKey = options.apiKey;\n  }\n\n  /**\n   * The current model that is being used by the transport layer.\n   */",
+              "  constructor(options: OpenAIRealtimeBaseOptions = {}) {\n    super();\n    this.#model = options.model ?? DEFAULT_OPENAI_REALTIME_MODEL;\n    this.#apiKey = options.apiKey;\n  }\n\n  emit<K extends keyof OpenAIRealtimeEventTypes>(\n    type: K,\n    ...args: OpenAIRealtimeEventTypes[K]\n  ): boolean {\n    if (\n      type === 'connection_change' &&\n      (args as OpenAIRealtimeEventTypes['connection_change'])[0] === 'connected'\n    ) {\n      this._resetConnectionScopedState();\n      this.#connectionStatePrepared = true;\n    }\n    return super.emit(type, ...args);\n  }\n\n  /**\n   * The current model that is being used by the transport layer.\n   */",
+              'connection change lifecycle interception',
+          )
+          source = replace_once(
+              source,
+              "        if (\n          tracked.deletePhase === 'output' &&\n          tracked.outputItemId === parsed.item_id\n        ) {\n          try {\n            this.sendEvent({\n              type: 'conversation.item.delete',\n              item_id: callId,\n            });\n            tracked.deletePhase = 'call';\n          } catch (error) {\n            this.#replayedFunctionCalls.delete(callId);\n            throw error;\n          }\n          break;\n        }",
+              "        if (\n          tracked.deletePhase === 'output' &&\n          tracked.outputItemId === parsed.item_id\n        ) {\n          tracked.outputDeleted = true;\n          tracked.outputItemId = undefined;\n          tracked.deletePhase = undefined;\n          try {\n            this.sendEvent({\n              type: 'conversation.item.delete',\n              item_id: callId,\n            });\n            tracked.deletePhase = 'call';\n          } catch (error) {\n            throw error;\n          }\n          break;\n        }",
+              'output deletion acknowledgement handling',
+          )
+          source = replace_once(
+              source,
+              "          this.emit('item_update', item);\n          if (\n            callId &&\n            !tracked.expectsOutput &&\n            parsed.type === 'conversation.item.done'\n          ) {\n            this.#replayedFunctionCalls.delete(callId);\n          }\n          return;",
+              "          this.emit('item_update', item);\n          return;",
+              'retain in-progress replay tracking',
+          )
+          source = replace_once(
+              source,
+              "        if (tracked) {\n          if (parsed.item.id) {\n            tracked.outputItemId = parsed.item.id;\n          }",
+              "        if (tracked) {\n          tracked.expectsOutput = true;\n          tracked.outputDeleted = false;\n          if (parsed.item.id) {\n            tracked.outputItemId = parsed.item.id;\n          }",
+              'output acknowledgement ownership',
+          )
+          source = replace_once(
+              source,
+              "  protected _onOpen() {\n    // Replay correlation is connection-scoped. Reset it before exposing a new\n    // connection so every OpenAIRealtimeBase subclass gets the same lifecycle\n    // behavior without transport-specific cleanup hooks.\n    this._resetConnectionScopedState();\n    this.emit('connected');\n  }\n\n  protected _onClose() {\n    this._resetConnectionScopedState();\n    this.emit('disconnected');\n  }",
+              "  protected _onOpen() {\n    // Most transports announce connection_change before invoking this hook.\n    // In that case replay state was already reset before listeners ran, and\n    // history restored by those listeners must survive this hook. Custom\n    // transports that call only _onOpen still get the same reset guarantee.\n    if (!this.#connectionStatePrepared) {\n      this._resetConnectionScopedState();\n    }\n    this.#connectionStatePrepared = false;\n    this.emit('connected');\n  }\n\n  protected _onClose() {\n    this.#connectionStatePrepared = false;\n    this._resetConnectionScopedState();\n    this.emit('disconnected');\n  }",
+              'open lifecycle ordering',
+          )
+          source = replace_once(
+              source,
+              "      const item = realtimeToolCallItem.parse({\n        itemId: toolCall.id,\n        previousItemId: toolCall.previousItemId,\n        type: 'function_call',\n        status: 'completed',\n        arguments: toolCall.arguments,\n        name: toolCall.name,\n        output,\n      });\n      this.emit('item_update', item);",
+              "      const item = realtimeToolCallItem.parse({\n        itemId: toolCall.id,\n        previousItemId: toolCall.previousItemId,\n        type: 'function_call',\n        status: 'completed',\n        arguments: toolCall.arguments,\n        name: toolCall.name,\n        output,\n      });\n      const tracked = this.#replayedFunctionCalls.get(toolCall.callId);\n      if (tracked) {\n        tracked.expectsOutput = true;\n        tracked.outputDeleted = false;\n        tracked.item = item;\n      }\n      this.emit('item_update', item);",
+              'public function output ownership',
+          )
+          source = replace_once(
+              source,
+              "      if (tracked?.expectsOutput && !tracked.outputItemId) {",
+              "      if (\n        tracked?.expectsOutput &&\n        !tracked.outputItemId &&\n        !tracked.outputDeleted\n      ) {",
+              'completed removal preflight',
+          )
+          source = replace_once(
+              source,
+              "        if (tracked?.expectsOutput && tracked.outputItemId) {",
+              "        if (\n          tracked?.expectsOutput &&\n          tracked.outputItemId &&\n          !tracked.outputDeleted\n        ) {",
+              'output-first deletion selection',
+          )
+          source = replace_once(
+              source,
+              "      } catch (error) {\n        if (deletion.trackedCallId) {\n          this.#replayedFunctionCalls.delete(deletion.trackedCallId);\n        }\n        throw error;\n      }",
+              "      } catch (error) {\n        // No acknowledgement was received, so retain replay ownership and IDs\n        // for a safe retry. deletePhase is set only after a successful send.\n        throw error;\n      }",
+              'deletion send failure ownership',
+          )
+          source = replace_once(
+              source,
+              "        try {\n          this.sendEvent({\n            type: 'conversation.item.create',\n            item: {\n              type: 'function_call',\n              id: addition.itemId,\n              call_id: callId,\n              name: addition.name,\n              arguments: addition.arguments,\n              status: addition.status,\n            },\n          });\n          if (addition.output !== null) {\n            this.sendEvent({\n              type: 'conversation.item.create',\n              item: {\n                type: 'function_call_output',\n                call_id: callId,\n                output: addition.output,\n              },\n            });\n          }\n        } catch (error) {\n          this.#replayedFunctionCalls.delete(callId);\n          throw error;\n        }",
+              "        let callCreateSent = false;\n        try {\n          this.sendEvent({\n            type: 'conversation.item.create',\n            item: {\n              type: 'function_call',\n              id: addition.itemId,\n              call_id: callId,\n              name: addition.name,\n              arguments: addition.arguments,\n              status: addition.status,\n            },\n          });\n          callCreateSent = true;\n          if (addition.output !== null) {\n            this.sendEvent({\n              type: 'conversation.item.create',\n              item: {\n                type: 'function_call_output',\n                call_id: callId,\n                output: addition.output,\n              },\n            });\n          }\n        } catch (error) {\n          if (!callCreateSent) {\n            this.#replayedFunctionCalls.delete(callId);\n          }\n          throw error;\n        }",
+              'partial replay send ownership',
+          )
+          source_path.write_text(source)
+
+          test_path = Path('packages/agents-realtime/test/functionCallHistoryReplay.test.ts')
+          test = test_path.read_text()
+          test = replace_once(
+              test,
+              "  events: RealtimeClientMessage[] = [];\n  failNextSend = false;\n  connect = vi.fn(async () => {});\n  sendEvent(event: RealtimeClientMessage) {\n    if (this.failNextSend) {\n      this.failNextSend = false;\n      throw new Error('synchronous send failure');\n    }\n    this.events.push(event);\n  }",
+              "  events: RealtimeClientMessage[] = [];\n  failNextSend = false;\n  failOnSendAttempt: number | null = null;\n  sendAttempts = 0;\n  connect = vi.fn(async () => {});\n  sendEvent(event: RealtimeClientMessage) {\n    this.sendAttempts += 1;\n    if (\n      this.failNextSend ||\n      this.failOnSendAttempt === this.sendAttempts\n    ) {\n      this.failNextSend = false;\n      this.failOnSendAttempt = null;\n      throw new Error('synchronous send failure');\n    }\n    this.events.push(event);\n  }",
+              'test send failure controls',
+          )
+          test = replace_once(
+              test,
+              "  open() {\n    this._onOpen();\n  }\n\n  closeTransport() {",
+              "  open() {\n    this._onOpen();\n  }\n\n  announceConnected() {\n    this.emit('connection_change', 'connected');\n    this._onOpen();\n  }\n\n  closeTransport() {",
+              'test connected notification helper',
+          )
+          test = replace_once(
+              test,
+              "function echoFunctionCall(base: TestBase) {\n  receive(base, {\n    type: 'conversation.item.added',",
+              "function echoFunctionCall(\n  base: TestBase,\n  type: 'conversation.item.added' | 'conversation.item.done' =\n    'conversation.item.added',\n) {\n  receive(base, {\n    type,",
+              'function call echo type helper',
+          )
+
+          insertion = r'''
+
+  it('preserves history restored synchronously from the connected notification', () => {
+    const base = new TestBase();
+    const call = functionCall();
+    base.resetHistory([], [call]);
+    base.closeTransport();
+    base.events = [];
+
+    base.on('connection_change', (status) => {
+      if (status === 'connected') {
+        base.resetHistory([], [call]);
+      }
+    });
+    base.announceConnected();
+
+    expect(base.events).toHaveLength(1);
+    base.events = [];
+    expect(() => base.resetHistory([], [call])).toThrowError(
+      /acknowledgement-pending replay/,
+    );
+    expect(base.events).toEqual([]);
+  });
+
+  it('retains ownership when a completed replay partially sends', () => {
+    const base = new TestBase();
+    const call = functionCall({ output: '{"temp":21}' });
+    base.failOnSendAttempt = 2;
+
+    expect(() => base.resetHistory([], [call])).toThrowError(
+      'synchronous send failure',
+    );
+    expect(base.events).toEqual([
+      expect.objectContaining({
+        type: 'conversation.item.create',
+        item: expect.objectContaining({ type: 'function_call', id: 'fc_1' }),
+      }),
+    ]);
+
+    base.events = [];
+    expect(() => base.resetHistory([], [call])).toThrowError(
+      /acknowledgement-pending replay/,
+    );
+    expect(base.events).toEqual([]);
+  });
+
+  it('retains in-progress replay correlation through a later public output', () => {
+    const base = new TestBase();
+    const pendingCall = functionCall();
+    const completedCall = functionCall({ output: '{"temp":21}' });
+    base.resetHistory([], [pendingCall]);
+    echoFunctionCall(base, 'conversation.item.done');
+    base.events = [];
+
+    base.sendFunctionCallOutput(
+      {
+        id: 'fc_1',
+        type: 'function_call',
+        name: 'get_weather',
+        callId: 'fc_1',
+        arguments: '{"city":"Paris"}',
+        responseId: 'response_1',
+      },
+      '{"temp":21}',
+      false,
+    );
+    base.events = [];
+
+    expect(() => base.resetHistory([completedCall], [])).toThrowError(
+      /before its output item is acknowledged/,
+    );
+    echoFunctionCallOutput(base);
+    base.events = [];
+
+    base.resetHistory([completedCall], []);
+    expect(base.events).toEqual([
+      { type: 'conversation.item.delete', item_id: 'fco_1' },
+    ]);
+  });
+
+  it('retains deletion ownership across synchronous send failures', () => {
+    const base = new TestBase();
+    const call = functionCall({ output: '{"temp":21}' });
+    base.resetHistory([], [call]);
+    echoFunctionCall(base);
+    echoFunctionCallOutput(base);
+    base.events = [];
+
+    base.failNextSend = true;
+    expect(() => base.resetHistory([call], [])).toThrowError(
+      'synchronous send failure',
+    );
+    expect(base.events).toEqual([]);
+
+    base.resetHistory([call], []);
+    expect(base.events).toEqual([
+      { type: 'conversation.item.delete', item_id: 'fco_1' },
+    ]);
+
+    base.failNextSend = true;
+    expect(() => echoDeleted(base, 'fco_1')).toThrowError(
+      'synchronous send failure',
+    );
+    base.events = [];
+
+    base.resetHistory([call], []);
+    expect(base.events).toEqual([
+      { type: 'conversation.item.delete', item_id: 'fc_1' },
+    ]);
+  });
+'''
+          marker = '\n});\n'
+          pos = test.rfind(marker)
+          if pos < 0:
+              raise RuntimeError('test insertion marker not found')
+          test = test[:pos] + insertion + test[pos:]
+          test_path.write_text(test)
+          PY
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format changed files
+        run: pnpm exec prettier --write packages/agents-realtime/src/openaiRealtimeBase.ts packages/agents-realtime/test/functionCallHistoryReplay.test.ts
+      - name: Run focused Realtime tests
+        run: pnpm exec vitest run packages/agents-realtime/test/functionCallHistoryReplay.test.ts packages/agents-realtime/test/openaiRealtimeBase.test.ts
+      - name: Lint changed files
+        run: pnpm exec eslint packages/agents-realtime/src/openaiRealtimeBase.ts packages/agents-realtime/test/functionCallHistoryReplay.test.ts
+      - name: Build checks
+        run: |
+          pnpm -F @openai/agents-core build
+          pnpm -F @openai/agents-realtime build-check
+          git diff --check
+      - name: Commit validated fixes to PR branch
+        run: |
+          git config user.name "Sylvester Kaczmarek"
+          git config user.email "16242628+sylvesterkaczmarek@users.noreply.github.com"
+          git add packages/agents-realtime/src/openaiRealtimeBase.ts packages/agents-realtime/test/functionCallHistoryReplay.test.ts
+          git diff --cached --check
+          git commit -s -m "fix(realtime): harden function call replay ownership"
+          git push origin HEAD:fix/realtime-function-call-history-645
