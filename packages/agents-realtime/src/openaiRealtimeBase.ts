@@ -501,9 +501,9 @@ export abstract class OpenAIRealtimeBase
             parsed.type === 'response.output_item.done'
               ? 'completed'
               : 'in_progress', // we set it to in_progress for the UI as it will only be completed with the output
-          arguments: item.arguments,
-          name: item.name,
-          output: item.output,
+          arguments: parsed.item.arguments,
+          name: parsed.item.name,
+          output: parsed.item.output,
         });
         this.emit('item_update', mcpCall);
         return;
@@ -617,7 +617,8 @@ export abstract class OpenAIRealtimeBase
   ): RealtimeSessionPayload {
     const newConfig = toNewSessionConfig(config);
 
-    const noiseReductionOverride = newConfig.audio?.input?.noiseReduction;
+    const inputAudioOverride = newConfig.audio?.input;
+    const noiseReductionOverride = inputAudioOverride?.noiseReduction;
     const transcriptionOverride = newConfig.audio?.input?.transcription;
     const turnDetectionOverride = OpenAIRealtimeBase.buildTurnDetectionConfig(
       newConfig.audio?.input?.turnDetection,
@@ -636,7 +637,7 @@ export abstract class OpenAIRealtimeBase
             newConfig.audio?.input?.format ??
             DEFAULT_OPENAI_REALTIME_SESSION_CONFIG.audio?.input?.format,
           noise_reduction:
-            noiseReductionOverride === undefined
+            noiseReductionOverride === undefined && inputAudioOverride === undefined
               ? DEFAULT_OPENAI_REALTIME_SESSION_CONFIG.audio?.input
                   ?.noiseReduction
               : noiseReductionOverride,
