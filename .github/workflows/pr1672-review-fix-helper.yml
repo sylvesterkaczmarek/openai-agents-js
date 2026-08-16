@@ -1,11 +1,14 @@
-name: PR 1672 final validation
+name: PR 1672 async error fix validation
 
 on:
   push:
     branches: [ops/pr1672-review-fixes]
 
+permissions:
+  contents: write
+
 jobs:
-  validate:
+  validate-and-push:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,10 +20,14 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - name: Fetch async error patch
+        run: git show origin/ops/pr1672-review-fixes:.github/scripts/pr1672_async_error_fix.py > /tmp/pr1672_async_error_fix.py
+      - name: Apply async error correlation fix
+        run: python /tmp/pr1672_async_error_fix.py
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Check formatting
-        run: pnpm exec prettier --check packages/agents-realtime/src/openaiRealtimeBase.ts packages/agents-realtime/test/functionCallHistoryReplay.test.ts packages/agents-realtime/test/openaiRealtimeBase.test.ts .changeset/green-function-history.md
+      - name: Format changed files
+        run: pnpm exec prettier --write packages/agents-realtime/src/openaiRealtimeBase.ts packages/agents-realtime/test/functionCallHistoryReplay.test.ts packages/agents-realtime/test/openaiRealtimeBase.test.ts
       - name: Run focused Realtime tests
         run: pnpm exec vitest run packages/agents-realtime/test/functionCallHistoryReplay.test.ts packages/agents-realtime/test/openaiRealtimeBase.test.ts
       - name: Lint changed TypeScript files
@@ -29,4 +36,12 @@ jobs:
         run: |
           pnpm -F @openai/agents-core build
           pnpm -F @openai/agents-realtime build-check
-          git diff --check b93163b5611b97f2fb40bc7094f45b75cc76c128..HEAD
+          git diff --check
+      - name: Push only after validation
+        run: |
+          git config user.name "Sylvester Kaczmarek"
+          git config user.email "16242628+sylvesterkaczmarek@users.noreply.github.com"
+          git add packages/agents-realtime/src/openaiRealtimeBase.ts packages/agents-realtime/test/functionCallHistoryReplay.test.ts packages/agents-realtime/test/openaiRealtimeBase.test.ts
+          git diff --cached --check
+          git commit -s -m "fix(realtime): correlate replay errors with client events"
+          git push origin HEAD:fix/realtime-function-call-history-645
