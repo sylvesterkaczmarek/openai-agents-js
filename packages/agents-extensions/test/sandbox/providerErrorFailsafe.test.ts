@@ -22,6 +22,15 @@ function hostileProviderError(): object {
   );
 }
 
+function malformedMessageError(message: unknown): Error {
+  const error = new Error('placeholder');
+  Object.defineProperty(error, 'message', {
+    configurable: true,
+    value: message,
+  });
+  return error;
+}
+
 describe('sandbox provider error inspection', () => {
   it('keeps diagnostic helpers fail-safe for hostile provider errors', () => {
     const error = hostileProviderError();
@@ -60,6 +69,50 @@ describe('sandbox provider error inspection', () => {
       retryable: null,
       cause: 'Provider error could not be inspected safely.',
     });
+  });
+
+  it('safely coerces malformed non-string Error messages', async () => {
+    const providerFailure = malformedMessageError(Symbol('provider failure'));
+
+    expect(providerErrorMessage(providerFailure)).toBe(
+      'Symbol(provider failure)',
+    );
+
+    await expect(
+      withProviderError(
+        'ProviderSandboxClient',
+        'provider',
+        'create sandbox',
+        async () => {
+          throw providerFailure;
+        },
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('Symbol(provider failure)'),
+    });
+  });
+
+  it('falls back when malformed Error messages cannot be stringified', async () => {
+    const providerFailure = malformedMessageError({
+      toString() {
+        throw new Error('message conversion trap');
+      },
+    });
+
+    expect(providerErrorMessage(providerFailure)).toBe(
+      'Provider error could not be inspected safely.',
+    );
+
+    await expect(
+      withProviderError(
+        'ProviderSandboxClient',
+        'provider',
+        'create sandbox',
+        async () => {
+          throw providerFailure;
+        },
+      ),
+    ).rejects.toBeInstanceOf(SandboxProviderError);
   });
 
   it('keeps hostile resume failures inside the provider error boundary', () => {
