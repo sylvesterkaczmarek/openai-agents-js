@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { toNewSessionConfig } from '../src/clientMessages';
+import { OpenAIRealtimeBase } from '../src/openaiRealtimeBase';
+
+class TestRealtimeTransport extends OpenAIRealtimeBase {
+  status: 'connected' | 'disconnected' | 'connecting' | 'disconnecting' =
+    'connected';
+  connect = vi.fn(async () => {});
+  sendEvent = vi.fn();
+  mute = vi.fn();
+  close = vi.fn();
+  interrupt = vi.fn();
+  get muted() {
+    return false;
+  }
+}
 
 describe('Realtime GA audio config conversion', () => {
   it('does not disable noise reduction when the caller only sets input format', () => {
@@ -29,5 +43,34 @@ describe('Realtime GA audio config conversion', () => {
     expect(enabled.audio?.input?.noiseReduction).toEqual({
       type: 'near_field',
     });
+  });
+
+  it('preserves omission in the emitted session payload', () => {
+    const transport = new TestRealtimeTransport();
+    const payload = transport.buildSessionPayload({
+      audio: {
+        input: {
+          format: { type: 'audio/pcm', rate: 24000 },
+        },
+      },
+    });
+
+    expect(payload.audio.input.noise_reduction).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(payload.audio.input))).not.toHaveProperty(
+      'noise_reduction',
+    );
+  });
+
+  it('keeps the default and explicit null behavior at the payload boundary', () => {
+    const transport = new TestRealtimeTransport();
+
+    expect(
+      transport.buildSessionPayload({}).audio.input.noise_reduction,
+    ).toBeNull();
+    expect(
+      transport.buildSessionPayload({
+        audio: { input: { noiseReduction: null } },
+      }).audio.input.noise_reduction,
+    ).toBeNull();
   });
 });
