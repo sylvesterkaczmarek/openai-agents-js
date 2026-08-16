@@ -20,11 +20,14 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - name: Fetch helper patch script
+      - name: Fetch helper patch scripts
         run: |
           git show origin/ops/pr1672-review-fixes:.github/scripts/pr1672_review_fixes.py > /tmp/pr1672_review_fixes.py
+          git show origin/ops/pr1672-review-fixes:.github/scripts/pr1672_lint_cleanup.py > /tmp/pr1672_lint_cleanup.py
       - name: Apply current review fixes
-        run: python /tmp/pr1672_review_fixes.py
+        run: |
+          python /tmp/pr1672_review_fixes.py
+          python /tmp/pr1672_lint_cleanup.py
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Format changed files
