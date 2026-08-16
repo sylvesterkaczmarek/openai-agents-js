@@ -164,7 +164,8 @@ export function assertResumeRecreateAllowed(
 export function providerErrorMessage(error: unknown): string {
   let message = UNINSPECTABLE_PROVIDER_ERROR;
   try {
-    message = errorMessage(error);
+    const inspectedMessage = errorMessage(error);
+    message = safelyCoerceProviderErrorText(inspectedMessage) ?? message;
   } catch {
     // Keep the generic fail-safe message.
   }
@@ -204,10 +205,25 @@ function safelyIsUserError(error: unknown): error is UserError {
   }
 }
 
-function errorMessage(error: unknown): string {
+function safelyCoerceProviderErrorText(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return value;
+  }
+  try {
+    return String(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function errorMessage(error: unknown): unknown {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof SandboxProviderError && error.details) {
-    return `${message} Details: ${formatErrorDetails(error.details)}`;
+    const safeMessage = safelyCoerceProviderErrorText(message);
+    if (safeMessage === undefined) {
+      return undefined;
+    }
+    return `${safeMessage} Details: ${formatErrorDetails(error.details)}`;
   }
   return message;
 }
