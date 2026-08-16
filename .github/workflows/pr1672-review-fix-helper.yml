@@ -20,10 +20,14 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - name: Fetch async error patch
-        run: git show origin/ops/pr1672-review-fixes:.github/scripts/pr1672_async_error_fix.py > /tmp/pr1672_async_error_fix.py
+      - name: Fetch async error patches
+        run: |
+          git show origin/ops/pr1672-review-fixes:.github/scripts/pr1672_async_error_fix.py > /tmp/pr1672_async_error_fix.py
+          git show origin/ops/pr1672-review-fixes:.github/scripts/pr1672_async_error_test_fix.py > /tmp/pr1672_async_error_test_fix.py
       - name: Apply async error correlation fix
-        run: python /tmp/pr1672_async_error_fix.py
+        run: |
+          python /tmp/pr1672_async_error_fix.py
+          python /tmp/pr1672_async_error_test_fix.py
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Format changed files
