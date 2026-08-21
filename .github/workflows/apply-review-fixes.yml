@@ -21,40 +21,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Fix screenshot reuse assertions
-        run: |
-          git fetch origin fix/computer-screenshot-reuse
-          git checkout -B fix/computer-screenshot-reuse origin/fix/computer-screenshot-reuse
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('packages/agents-core/test/runner/toolExecution.test.ts')
-          text = path.read_text()
-          old = """    expect(items).toHaveLength(1);\n    expect(items[0]).toBeInstanceOf(ToolCallOutputItem);\n    expect(fakeComputer.screenshot).toHaveBeenCalledTimes(2);\n  });\n\n  it('passes RunContext to computer actions'"""
-          new = """    expect(items).toHaveLength(1);\n    expect(items[0]).toBeInstanceOf(ToolCallOutputItem);\n    expect(fakeComputer.screenshot).toHaveBeenCalledTimes(1);\n  });\n\n  it('passes RunContext to computer actions'"""
-          if text.count(old) != 1:
-              raise SystemExit(f'Expected one toolExecution target, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
-          PY
-          git add packages/agents-core/test/runner/toolExecution.test.ts
-          git commit -m "test(core): align screenshot reuse assertions" || true
-          git push origin HEAD:fix/computer-screenshot-reuse
-
-      - name: Fix post-stream abort reconciliation
+      - name: Restore final newline in reconciliation test
         run: |
           git fetch origin fix/stream-abort-computer-reconciliation
           git checkout -B fix/stream-abort-computer-reconciliation origin/fix/stream-abort-computer-reconciliation
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('packages/agents-core/src/run.ts')
+          path = Path('packages/agents-core/test/runner/streamReconciliation.test.ts')
           text = path.read_text()
-          old = """          await awaitInputGuardrails();\n          await commitDeferredLocalPendingInput?.();\n\n          if (result.cancelled) {\n            return;\n          }\n\n          result.state._noActiveAgentRun = false;"""
-          new = """          await awaitInputGuardrails();\n          await commitDeferredLocalPendingInput?.();\n\n          if (result.cancelled) {\n            await reconcileStreamAbortIfNeeded();\n            return;\n          }\n\n          result.state._noActiveAgentRun = false;"""
-          if text.count(old) != 1:
-              raise SystemExit(f'Expected one run.ts target, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          if not text.endswith('\n'):
+              path.write_text(text + '\n')
           PY
-          git add packages/agents-core/src/run.ts
-          git commit -m "fix(core): reconcile terminal computer calls after cancellation" || true
+          git add packages/agents-core/test/runner/streamReconciliation.test.ts
+          git commit -m "style(core): restore reconciliation test newline" || true
           git push origin HEAD:fix/stream-abort-computer-reconciliation
