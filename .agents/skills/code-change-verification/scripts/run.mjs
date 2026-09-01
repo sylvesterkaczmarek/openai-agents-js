@@ -22,6 +22,8 @@ const VALIDATION_COMMANDS = [
   'pnpm test',
   'pnpm format:check:changed',
 ];
+const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%!\r\n]/u;
+const WINDOWS_CMD_QUOTE_CHARS_RE = /[\s()"^]/u;
 
 function printUsage() {
   console.log(`code-change-verification
@@ -46,16 +48,54 @@ function getRepoRoot() {
   }
 }
 
-function getPnpmCommand() {
-  return process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+function escapeForCmdExe(arg) {
+  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
+    throw new Error(
+      `unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`,
+    );
+  }
+
+  const escaped = arg.replace(/\^/gu, '^^');
+  if (!WINDOWS_CMD_QUOTE_CHARS_RE.test(arg)) {
+    return escaped;
+  }
+  return `"${escaped.replace(/"/gu, '""')}"`;
+}
+
+function buildCmdExeCommandLine(command, args) {
+  return [escapeForCmdExe(command), ...args.map(escapeForCmdExe)].join(' ');
+}
+
+export function getPnpmInvocation(
+  args,
+  {
+    platform = process.platform,
+    comSpec = process.env.ComSpec ?? 'cmd.exe',
+  } = {},
+) {
+  if (platform === 'win32') {
+    return {
+      command: comSpec,
+      args: ['/d', '/s', '/c', buildCmdExeCommandLine('pnpm.cmd', args)],
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return {
+    command: 'pnpm',
+    args,
+    windowsVerbatimArguments: false,
+  };
 }
 
 function runPnpm(repoRoot, label, args) {
   console.log(`Running pnpm ${args.join(' ')}...`);
-  const result = spawnSync(getPnpmCommand(), args, {
+  const invocation = getPnpmInvocation(args);
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     env: process.env,
     stdio: 'inherit',
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
 
   if (result.error) {
@@ -111,9 +151,11 @@ function runVerification() {
   return 0;
 }
 
-if (process.argv.includes('--help')) {
-  printUsage();
-  process.exit(0);
-}
+if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
+  if (process.argv.includes('--help')) {
+    printUsage();
+    process.exit(0);
+  }
 
-process.exit(runVerification());
+  process.exit(runVerification());
+}

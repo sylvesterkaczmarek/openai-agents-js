@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
+import { getPnpmInvocation } from '../../.agents/skills/code-change-verification/scripts/run.mjs';
 
 const rootDir = resolve(import.meta.dirname, '../..');
 const skillPath = resolve(
@@ -30,6 +31,47 @@ describe('code-change verification policy', () => {
     expect(skill).toContain(
       '/usr/bin/env -u OPENAI_API_KEY bash .agents/skills/code-change-verification/scripts/run.sh',
     );
+  });
+
+  it('routes Windows pnpm commands through cmd.exe with explicit quoting', () => {
+    const invocation = getPnpmInvocation(
+      [
+        'exec',
+        'concurrently',
+        '--names',
+        'build-check,dist-check',
+        'pnpm -r build-check',
+        'pnpm -r -F "@openai/*" dist:check',
+      ],
+      {
+        platform: 'win32',
+        comSpec: 'C:\\Windows\\System32\\cmd.exe',
+      },
+    );
+
+    expect(invocation).toEqual({
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: [
+        '/d',
+        '/s',
+        '/c',
+        'pnpm.cmd exec concurrently --names build-check,dist-check "pnpm -r build-check" "pnpm -r -F ""@openai/*"" dist:check"',
+      ],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it('keeps direct pnpm spawning on non-Windows platforms', () => {
+    expect(
+      getPnpmInvocation(['test'], {
+        platform: 'linux',
+        comSpec: 'ignored',
+      }),
+    ).toEqual({
+      command: 'pnpm',
+      args: ['test'],
+      windowsVerbatimArguments: false,
+    });
   });
 
   it('runs CI for code-change verification policy updates', () => {
