@@ -3,15 +3,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { getOpenFileInvocation } from './open-file-command';
 
 function openFile(filePath: string): void {
-  if (process.platform === 'darwin') {
-    spawnSync('open', [filePath], { stdio: 'inherit' });
-  } else if (process.platform === 'win32') {
-    spawnSync('cmd', ['/c', 'start', '', filePath], { shell: true });
-  } else {
-    spawnSync('xdg-open', [filePath], { stdio: 'inherit' });
-  }
+  const invocation = getOpenFileInvocation(filePath);
+  spawnSync(invocation.command, invocation.args, { stdio: 'inherit' });
 }
 
 async function main() {
