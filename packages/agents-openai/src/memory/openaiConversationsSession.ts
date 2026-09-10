@@ -38,6 +38,7 @@ export class OpenAIConversationsSession
   #conversationId?: string;
   #conversationIdOperation: Promise<void> = Promise.resolve();
   #activeItemOperations = new Set<Promise<void>>();
+  #popItemOperation: Promise<void> = Promise.resolve();
 
   constructor(options: OpenAIConversationsSessionOptions = {}) {
     this.#client = resolveClient(options);
@@ -228,20 +229,28 @@ export class OpenAIConversationsSession
   }
 
   async popItem(): Promise<AgentInputItem | undefined> {
-    return this.#runItemOperation(async (conversationId) => {
-      const [latest] = await this.#getItems(conversationId, 1);
-      if (!latest) {
-        return undefined;
-      }
+    // Register queued pops before waiting so clearSession drains them too.
+    return this.#runItemOperation((conversationId) => {
+      const result = this.#popItemOperation.then(async () => {
+        const [latest] = await this.#getItems(conversationId, 1);
+        if (!latest) {
+          return undefined;
+        }
 
-      const itemId = (latest as { id?: string }).id;
-      if (itemId) {
-        await this.#client.conversations.items.delete(itemId, {
-          conversation_id: conversationId,
-        });
-      }
+        const itemId = (latest as { id?: string }).id;
+        if (itemId) {
+          await this.#client.conversations.items.delete(itemId, {
+            conversation_id: conversationId,
+          });
+        }
 
-      return latest;
+        return latest;
+      });
+      this.#popItemOperation = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
     });
   }
 
